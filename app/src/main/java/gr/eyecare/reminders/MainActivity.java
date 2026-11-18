@@ -30,6 +30,11 @@ import java.time.LocalTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.ArrayList;
 import java.util.Locale;
 
 public final class MainActivity extends Activity {
@@ -46,8 +51,8 @@ public final class MainActivity extends Activity {
 
     private final Handler summaryHandler = new Handler(Looper.getMainLooper());
     private final Runnable summaryRefresh = this::refreshSummary;
-    private final TextView[] frequencies = new TextView[MEDICATIONS.length];
-    private final TextView[] nextReminders = new TextView[MEDICATIONS.length];
+    private record Summary(TextView frequency, TextView next) {}
+    private final Map<String, Summary> summaries = new LinkedHashMap<>();
     private ReminderStore store;
     private LinearLayout content;
     private ScrollView scroll;
@@ -148,19 +153,23 @@ public final class MainActivity extends Activity {
             }
         }
 
-        add(content, label("Ανά κολλύριο", 22, INK, true), 22);
-        for (int index = 0; index < MEDICATIONS.length; index++) {
+        add(content, button("＋ Προσθήκη φαρμάκου", true, () -> editSchedule(null)), 18);
+        add(content, label("Ανά φάρμακο", 22, INK, true), 20);
+        List<ReminderStore.Reminder> reminders = store.reminders();
+        summaries.clear();
+        for (String name : medicationNames(reminders)) {
             LinearLayout overview = card();
-            add(overview, label(MEDICATIONS[index], 19, INK, true), 0);
-            frequencies[index] = label("", 15, MUTED, false);
-            nextReminders[index] = label("", 16, ACCENT, true);
-            add(overview, frequencies[index], 4);
-            add(overview, nextReminders[index], 5);
+            add(overview, label(name, 19, INK, true), 0);
+            TextView frequency = label("", 15, MUTED, false);
+            TextView next = label("", 16, ACCENT, true);
+            summaries.put(name, new Summary(frequency, next));
+            add(overview, frequency, 4);
+            add(overview, next, 5);
+            add(overview, button("Ρύθμιση προγράμματος", false, () -> editSchedule(name)), 8);
         }
         refreshSummary();
 
         add(content, label("Πρόγραμμα", 22, INK, true), 22);
-        List<ReminderStore.Reminder> reminders = store.reminders();
         if (reminders.isEmpty()) {
             add(card(), label("Πρόσθεσε την πρώτη σου υπενθύμιση.", 16, MUTED, false), 0);
         }
@@ -182,6 +191,7 @@ public final class MainActivity extends Activity {
                 add(item, button("Καταχώριση λήψης", false, () -> {
                     store.markTaken(reminder, LocalDate.now());
                     ReminderReceiver.dismiss(this, reminder.id());
+                    ReminderReceiver.scheduleAll(this);
                     render(true);
                 }), 8);
             }
@@ -202,11 +212,11 @@ public final class MainActivity extends Activity {
         ZonedDateTime now = ZonedDateTime.now();
         LocalDate today = now.toLocalDate();
         List<ReminderStore.Reminder> reminders = store.reminders();
-        for (int index = 0; index < MEDICATIONS.length; index++) {
+        for (Map.Entry<String, Summary> summary : summaries.entrySet()) {
             int activeTimes = 0;
             ZonedDateTime next = null;
             for (ReminderStore.Reminder reminder : reminders) {
-                if (!MEDICATIONS[index].equals(reminder.medication())
+                if (!summary.getKey().equals(reminder.medication())
                         || (reminder.through() != null && reminder.through().isBefore(today))) {
                     continue;
                 }
@@ -220,10 +230,10 @@ public final class MainActivity extends Activity {
                     next = candidate;
                 }
             }
-            frequencies[index].setText(activeTimes == 0 ? getString(R.string.no_daily_frequency)
+            summary.getValue().frequency().setText(activeTimes == 0 ? getString(R.string.no_daily_frequency)
                     : getResources().getQuantityString(
                             R.plurals.daily_frequency, activeTimes, activeTimes));
-            nextReminders[index].setText(next == null
+            summary.getValue().next().setText(next == null
                     ? getString(R.string.no_next_reminder)
                     : getString(R.string.next_reminder, next.toLocalDate().equals(today)
                             ? getString(R.string.today) : getString(R.string.tomorrow),
@@ -248,21 +258,40 @@ public final class MainActivity extends Activity {
             add(item, label(entry.medication() + " · " + entry.time(), 17, INK, true), 0);
             add(item, button("Αναίρεση καταχώρισης", false, () -> {
                 store.undo(entry.id(), entry.date());
+                ReminderReceiver.scheduleAll(this);
                 render(true);
             }), 8);
         }
+    }
+
+    private List<String> medicationNames(List<ReminderStore.Reminder> reminders) {
+        LinkedHashSet<String> names = new LinkedHashSet<>(Arrays.asList(MEDICATIONS));
+        for (ReminderStore.Reminder reminder : reminders) names.add(reminder.medication());
+        return new ArrayList<>(names);
+    }
+
+    private void editSchedule(String name) {
+        List<ReminderStore.Reminder> reminders = store.reminders();
+        List<ReminderStore.Reminder> existing = new ArrayList<>();
+        for (ReminderStore.Reminder reminder : reminders) {
+            if (reminder.medication().equals(name)) existing.add(reminder);
+        }
+        new ScheduleEditor(this, name, medicationNames(reminders), existing, plan -> {
+            store.replaceSchedule(plan.medication(), plan.times(), plan.through());
+            ReminderReceiver.scheduleAll(this);
+            render(true);
+        }).show();
     }
 
     private void edit(ReminderStore.Reminder existing) {
         LinearLayout form = column();
         form.setPadding(dp(20), dp(10), dp(20), 0);
         Spinner medication = new Spinner(this);
+        List<String> names = medicationNames(store.reminders());
         ArrayAdapter<String> choices = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_dropdown_item, MEDICATIONS);
+                android.R.layout.simple_spinner_dropdown_item, names);
         medication.setAdapter(choices);
-        if (existing != null && MEDICATIONS[1].equals(existing.medication())) {
-            medication.setSelection(1);
-        }
+        if (existing != null) medication.setSelection(names.indexOf(existing.medication()));
         LocalTime[] time = {existing == null ? null : existing.time()};
         LocalDate[] through = {existing == null ? null : existing.through()};
         add(form, label("Κολλύριο", 15, INK, true), 0);
@@ -311,7 +340,8 @@ public final class MainActivity extends Activity {
                     return;
                 }
             }
-            ReminderReceiver.schedule(this, store.save(existing, selected, time[0], through[0]));
+            store.save(existing, selected, time[0], through[0]);
+            ReminderReceiver.scheduleAll(this);
             dialog.dismiss();
             render(true);
         });
@@ -323,7 +353,8 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("Άκυρο", null)
                 .setPositiveButton("Διαγραφή", (dialog, which) -> {
                     store.remove(reminder);
-                    ReminderReceiver.cancel(this, reminder.id());
+                    ReminderReceiver.dismiss(this, reminder.id());
+                    ReminderReceiver.scheduleAll(this);
                     render(true);
                 }).show();
     }

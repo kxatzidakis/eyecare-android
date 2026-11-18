@@ -8,6 +8,8 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 final class ReminderStore {
@@ -37,6 +39,27 @@ final class ReminderStore {
         preferences.edit().putString("reminder/" + id,
                 medication + "|" + time + "|" + (through == null ? "" : through)).apply();
         return new Reminder(id, medication, time, through);
+    }
+
+    void replaceSchedule(String medication, List<LocalTime> times, LocalDate through) {
+        Map<LocalTime, String> existing = new HashMap<>();
+        SharedPreferences.Editor editor = preferences.edit();
+        for (Reminder reminder : reminders()) {
+            if (!reminder.medication().equals(medication)) continue;
+            editor.remove("reminder/" + reminder.id());
+            if (taken(reminder, LocalDate.now())) {
+                existing.put(reminder.time(), reminder.id());
+            } else {
+                existing.putIfAbsent(reminder.time(), reminder.id());
+            }
+        }
+        for (LocalTime time : times) {
+            String id = existing.get(time);
+            if (id == null) id = UUID.randomUUID().toString();
+            editor.putString("reminder/" + id,
+                    medication + "|" + time + "|" + (through == null ? "" : through));
+        }
+        editor.apply();
     }
 
     void remove(Reminder reminder) {

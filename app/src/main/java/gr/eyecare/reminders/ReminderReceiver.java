@@ -12,54 +12,80 @@ import android.net.Uri;
 import android.os.Build;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.time.ZonedDateTime;
 
 public final class ReminderReceiver extends BroadcastReceiver {
     private static final String ALARM = "gr.eyecare.reminders.ALARM";
+    private static final String NEXT = "next";
     private static final String TEST = "test";
     private static final String CHANNEL = "eye_drops";
 
     @Override
     public void onReceive(Context context, Intent intent) {
         if (!ALARM.equals(intent.getAction())) {
+            if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(intent.getAction())) {
+                cancelLegacyAlarms(context);
+            }
             scheduleAll(context);
             return;
         }
+
         String id = intent.getData().getLastPathSegment();
         if (TEST.equals(id)) {
             notify(context, id, "Δοκιμή EyeCare", "Η δοκιμαστική ειδοποίηση έφτασε.");
             return;
         }
+        if (NEXT.equals(id)) {
+            deliverDueReminders(context, intent.getLongExtra("due", 0L));
+        }
+        scheduleAll(context);
+    }
 
-        LocalDate today = LocalDate.now();
+    private void deliverDueReminders(Context context, long dueMillis) {
+        if (dueMillis == 0L) return;
+        ZonedDateTime now = ZonedDateTime.now();
+        ZonedDateTime due = Instant.ofEpochMilli(dueMillis).atZone(now.getZone());
+        LocalDate today = now.toLocalDate();
+        if (!today.equals(due.toLocalDate())) return;
+
         ReminderStore store = new ReminderStore(context);
         for (ReminderStore.Reminder reminder : store.reminders()) {
-            if (!reminder.id().equals(id)) continue;
-            schedule(context, reminder);
-            if (today.toString().equals(intent.getStringExtra("date"))
-                    && (reminder.through() == null || !today.isAfter(reminder.through()))
-                    && !store.taken(reminder, today)) {
-                notify(context, id, "Υπενθύμιση κολλυρίου", reminder.medication()
-                        + " · " + reminder.time());
+            if (reminder.through() != null && today.isAfter(reminder.through())) continue;
+            ZonedDateTime scheduled = today.atTime(reminder.time()).atZone(now.getZone());
+            if (!scheduled.isBefore(due) && !scheduled.isAfter(now) && !store.taken(reminder, today)) {
+                notify(context, reminder.id(), "Υπενθύμιση φαρμάκου",
+                        reminder.medication() + " · " + reminder.time());
             }
-            return;
         }
     }
 
     static void scheduleAll(Context context) {
-        for (ReminderStore.Reminder reminder : new ReminderStore(context).reminders()) {
-            schedule(context, reminder);
+        ReminderStore store = new ReminderStore(context);
+        ZonedDateTime now = ZonedDateTime.now();
+        LocalDate today = now.toLocalDate();
+        ZonedDateTime next = null;
+        for (ReminderStore.Reminder reminder : store.reminders()) {
+            ZonedDateTime candidate = nextOccurrence(reminder, now);
+            if (candidate != null && candidate.toLocalDate().equals(today)
+                    && store.taken(reminder, today)) {
+                candidate = nextOccurrence(reminder, candidate);
+            }
+            if (candidate != null && (next == null || candidate.isBefore(next))) next = candidate;
         }
-    }
-
-    static void schedule(Context context, ReminderStore.Reminder reminder) {
-        ZonedDateTime next = nextOccurrence(reminder, ZonedDateTime.now());
         if (next == null) {
-            cancel(context, reminder.id());
+            cancelAlarm(context, NEXT);
             return;
         }
-        setAlarm(context, next.toInstant().toEpochMilli(),
-                operation(context, reminder.id(), next.toLocalDate().toString()));
+        long due = next.toInstant().toEpochMilli();
+        setAlarm(context, due, operation(context, NEXT, due,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+    }
+
+    private void cancelLegacyAlarms(Context context) {
+        for (ReminderStore.Reminder reminder : new ReminderStore(context).reminders()) {
+            cancelAlarm(context, reminder.id());
+        }
     }
 
     static ZonedDateTime nextOccurrence(ReminderStore.Reminder reminder, ZonedDateTime now) {
@@ -72,7 +98,9 @@ public final class ReminderReceiver extends BroadcastReceiver {
     }
 
     static void scheduleTest(Context context) {
-        setAlarm(context, System.currentTimeMillis() + 15_000L, operation(context, TEST, ""));
+        long due = System.currentTimeMillis() + 15_000L;
+        setAlarm(context, due, operation(context, TEST, due,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
     }
 
     static boolean exactAllowed(Context context) {
@@ -80,9 +108,13 @@ public final class ReminderReceiver extends BroadcastReceiver {
                 || context.getSystemService(AlarmManager.class).canScheduleExactAlarms();
     }
 
-    static void cancel(Context context, String id) {
-        context.getSystemService(AlarmManager.class).cancel(operation(context, id, ""));
-        dismiss(context, id);
+    private static void cancelAlarm(Context context, String id) {
+        PendingIntent operation = operation(context, id, 0L,
+                PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
+        if (operation != null) {
+            context.getSystemService(AlarmManager.class).cancel(operation);
+            operation.cancel();
+        }
     }
 
     static void dismiss(Context context, String id) {
@@ -117,11 +149,10 @@ public final class ReminderReceiver extends BroadcastReceiver {
         manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, operation);
     }
 
-    private static PendingIntent operation(Context context, String id, String date) {
+    private static PendingIntent operation(Context context, String id, long due, int flags) {
         Intent intent = new Intent(context, ReminderReceiver.class).setAction(ALARM)
-                .setData(Uri.parse("eyecare://alarm/" + id)).putExtra("date", date);
-        return PendingIntent.getBroadcast(context, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                .setData(Uri.parse("eyecare://alarm/" + id)).putExtra("due", due);
+        return PendingIntent.getBroadcast(context, 0, intent, flags);
     }
 
     private void notify(Context context, String id, String title, String message) {

@@ -9,4 +9,5 @@
         <item quantity="one">Συχνότητα · %d φορά την ημέρα</item>
         <item quantity="other">Συχνότητα · %d φορές την ημέρα</item>
     </plurals>
+    <string name="schedule_time">%1$s · %2$s</string>
 </resources>
