@@ -53,17 +53,22 @@ public final class ReminderReceiver extends BroadcastReceiver {
     }
 
     static void schedule(Context context, ReminderStore.Reminder reminder) {
-        ZonedDateTime now = ZonedDateTime.now();
-        ZonedDateTime next = now.toLocalDate().atTime(reminder.time()).atZone(now.getZone());
-        if (!next.isAfter(now)) {
-            next = now.toLocalDate().plusDays(1).atTime(reminder.time()).atZone(now.getZone());
-        }
-        if (reminder.through() != null && next.toLocalDate().isAfter(reminder.through())) {
+        ZonedDateTime next = nextOccurrence(reminder, ZonedDateTime.now());
+        if (next == null) {
             cancel(context, reminder.id());
             return;
         }
         setAlarm(context, next.toInstant().toEpochMilli(),
                 operation(context, reminder.id(), next.toLocalDate().toString()));
+    }
+
+    static ZonedDateTime nextOccurrence(ReminderStore.Reminder reminder, ZonedDateTime now) {
+        ZonedDateTime next = now.toLocalDate().atTime(reminder.time()).atZone(now.getZone());
+        if (!next.isAfter(now)) {
+            next = now.toLocalDate().plusDays(1).atTime(reminder.time()).atZone(now.getZone());
+        }
+        return reminder.through() == null || !next.toLocalDate().isAfter(reminder.through())
+                ? next : null;
     }
 
     static void scheduleTest(Context context) {

@@ -12,6 +12,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -25,6 +27,7 @@ import android.widget.Toast;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
@@ -41,6 +44,10 @@ public final class MainActivity extends Activity {
             DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.forLanguageTag("el-GR"));
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
+    private final Handler summaryHandler = new Handler(Looper.getMainLooper());
+    private final Runnable summaryRefresh = this::refreshSummary;
+    private final TextView[] frequencies = new TextView[MEDICATIONS.length];
+    private final TextView[] nextReminders = new TextView[MEDICATIONS.length];
     private ReminderStore store;
     private LinearLayout content;
     private ScrollView scroll;
@@ -65,6 +72,12 @@ public final class MainActivity extends Activity {
             ReminderReceiver.scheduleAll(this);
         }
         render(true);
+    }
+
+    @Override
+    protected void onPause() {
+        summaryHandler.removeCallbacks(summaryRefresh);
+        super.onPause();
     }
 
     @Override
@@ -111,6 +124,7 @@ public final class MainActivity extends Activity {
         tabs.addView(button("Ιστορικό", history, () -> showHistory(true)), second);
         add(content, tabs, 20);
 
+        summaryHandler.removeCallbacks(summaryRefresh);
         if (history) renderHistory();
         else renderToday();
         scroll.post(() -> scroll.scrollTo(0, previousScroll));
@@ -133,6 +147,17 @@ public final class MainActivity extends Activity {
                         new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, packageUri()))), 8);
             }
         }
+
+        add(content, label("Ανά κολλύριο", 22, INK, true), 22);
+        for (int index = 0; index < MEDICATIONS.length; index++) {
+            LinearLayout overview = card();
+            add(overview, label(MEDICATIONS[index], 19, INK, true), 0);
+            frequencies[index] = label("", 15, MUTED, false);
+            nextReminders[index] = label("", 16, ACCENT, true);
+            add(overview, frequencies[index], 4);
+            add(overview, nextReminders[index], 5);
+        }
+        refreshSummary();
 
         add(content, label("Πρόγραμμα", 22, INK, true), 22);
         List<ReminderStore.Reminder> reminders = store.reminders();
@@ -171,6 +196,40 @@ public final class MainActivity extends Activity {
                         Toast.LENGTH_LONG).show();
             }), 8);
         }
+    }
+
+    private void refreshSummary() {
+        ZonedDateTime now = ZonedDateTime.now();
+        LocalDate today = now.toLocalDate();
+        List<ReminderStore.Reminder> reminders = store.reminders();
+        for (int index = 0; index < MEDICATIONS.length; index++) {
+            int activeTimes = 0;
+            ZonedDateTime next = null;
+            for (ReminderStore.Reminder reminder : reminders) {
+                if (!MEDICATIONS[index].equals(reminder.medication())
+                        || (reminder.through() != null && reminder.through().isBefore(today))) {
+                    continue;
+                }
+                activeTimes++;
+                ZonedDateTime candidate = ReminderReceiver.nextOccurrence(reminder, now);
+                if (candidate != null && candidate.toLocalDate().equals(today)
+                        && store.taken(reminder, today)) {
+                    candidate = ReminderReceiver.nextOccurrence(reminder, candidate);
+                }
+                if (candidate != null && (next == null || candidate.isBefore(next))) {
+                    next = candidate;
+                }
+            }
+            frequencies[index].setText(activeTimes == 0 ? getString(R.string.no_daily_frequency)
+                    : getResources().getQuantityString(
+                            R.plurals.daily_frequency, activeTimes, activeTimes));
+            nextReminders[index].setText(next == null
+                    ? getString(R.string.no_next_reminder)
+                    : getString(R.string.next_reminder, next.toLocalDate().equals(today)
+                            ? getString(R.string.today) : getString(R.string.tomorrow),
+                            next.toLocalTime().withSecond(0).withNano(0)));
+        }
+        summaryHandler.postDelayed(summaryRefresh, 60_000L - System.currentTimeMillis() % 60_000L);
     }
 
     private void renderHistory() {

@@ -1,3 +1,12 @@
 <resources>
     <string name="selected_time">Ώρα %1$s</string>
+    <string name="today">σήμερα</string>
+    <string name="tomorrow">αύριο</string>
+    <string name="no_daily_frequency">Χωρίς ενεργό πρόγραμμα</string>
+    <string name="no_next_reminder">Επόμενη λήψη · —</string>
+    <string name="next_reminder">Επόμενη λήψη · %1$s στις %2$s</string>
+    <plurals name="daily_frequency">
+        <item quantity="one">Συχνότητα · %d φορά την ημέρα</item>
+        <item quantity="other">Συχνότητα · %d φορές την ημέρα</item>
+    </plurals>
 </resources>
